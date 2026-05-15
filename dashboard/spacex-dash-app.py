@@ -4,104 +4,163 @@ from dash import html, dcc
 from dash.dependencies import Input, Output
 import plotly.express as px
 
+# Load SpaceX dataset
+spacex_df = pd.read_csv(
+    "https://cf-courses-data.s3.us.cloud-object-storage.appdomain.cloud/"
+    "IBM-DS0321EN-SkillsNetwork/datasets/spacex_launch_dash.csv"
+)
+
+# Get payload range
+max_payload = spacex_df['Payload Mass (kg)'].max()
+min_payload = spacex_df['Payload Mass (kg)'].min()
+
 # Initialize app
 app = dash.Dash(__name__)
-app.config.suppress_callback_exceptions = True
 
-# Load dataset
-df = pd.read_csv(
-    'https://cf-courses-data.s3.us.cloud-object-storage.appdomain.cloud/IBMDeveloperSkillsNetwork-DV0101EN-SkillsNetwork/Data%20Files/Historical_Wildfires.csv'
-)
+# App layout
+app.layout = html.Div(children=[
 
-# Extract Month and Year
-df['Month'] = pd.to_datetime(df['Date']).dt.month_name()
-df['Year'] = pd.to_datetime(df['Date']).dt.year
-
-# Layout
-app.layout = html.Div([
-
-    # Title
     html.H1(
-        'Australia Wildfire Dashboard',
-        style={'textAlign': 'center', 'color': '#503D36', 'font-size': 26}
+        'SpaceX Launch Records Dashboard',
+        style={
+            'textAlign': 'center',
+            'color': '#503D36',
+            'font-size': 40
+        }
     ),
 
-    # Controls
-    html.Div([
+    # Dropdown
+    dcc.Dropdown(
+        id='site-dropdown',
+        options=[
+            {'label': 'All Sites', 'value': 'ALL'},
+            {'label': 'CCAFS LC-40', 'value': 'CCAFS LC-40'},
+            {'label': 'CCAFS SLC-40', 'value': 'CCAFS SLC-40'},
+            {'label': 'KSC LC-39A', 'value': 'KSC LC-39A'},
+            {'label': 'VAFB SLC-4E', 'value': 'VAFB SLC-4E'}
+        ],
+        value='ALL',
+        placeholder='Select a Launch Site here',
+        searchable=True
+    ),
 
-        # Region selector
-        html.Div([
-            html.H2('Select Region:', style={'margin-right': '2em'}),
-            dcc.RadioItems(
-                options=[
-                    {"label": "New South Wales", "value": "NSW"},
-                    {"label": "Northern Territory", "value": "NT"},
-                    {"label": "Queensland", "value": "QL"},
-                    {"label": "South Australia", "value": "SA"},
-                    {"label": "Tasmania", "value": "TA"},
-                    {"label": "Victoria", "value": "VI"},
-                    {"label": "Western Australia", "value": "WA"}
-                ],
-                value='NSW',
-                id='region',
-                inline=True
-            )
-        ]),
+    html.Br(),
 
-        # Year selector
-        html.Div([
-            html.H2('Select Year:', style={'margin-right': '2em'}),
-            dcc.Dropdown(
-                options=[{'label': y, 'value': y} for y in sorted(df['Year'].unique())],
-                value=2005,
-                id='year'
-            )
-        ]),
+    # Pie chart
+    html.Div(dcc.Graph(id='success-pie-chart')),
 
-        # Output graphs
-        html.Div([
-            html.Div(id='plot1'),
-            html.Div(id='plot2')
-        ], style={'display': 'flex', 'gap': '20px'})
+    html.Br(),
 
-    ])
+    html.P("Payload range (Kg):"),
+
+    # Slider
+    dcc.RangeSlider(
+        id='payload-slider',
+        min=0,
+        max=10000,
+        step=1000,
+        marks={
+            0: '0',
+            2500: '2500',
+            5000: '5000',
+            7500: '7500',
+            10000: '10000'
+        },
+        value=[min_payload, max_payload]
+    ),
+
+    html.Br(),
+
+    # Scatter chart
+    html.Div(dcc.Graph(id='success-payload-scatter-chart'))
+
 ])
 
-# Callback
+# Pie chart callback
 @app.callback(
-    [Output('plot1', 'children'),
-     Output('plot2', 'children')],
-    [Input('region', 'value'),
-     Input('year', 'value')]
+    Output('success-pie-chart', 'figure'),
+    Input('site-dropdown', 'value')
 )
-def update_dashboard(region, year):
+def get_pie_chart(entered_site):
 
-    # Filter data
-    filtered = df[(df['Region'] == region) & (df['Year'] == year)]
+    if entered_site == 'ALL':
 
-    # Pie chart (Fire area)
-    est_data = filtered.groupby('Month')['Estimated_fire_area'].mean().reset_index()
-    fig1 = px.pie(
-        est_data,
-        values='Estimated_fire_area',
-        names='Month',
-        title=f"{region}: Monthly Avg Fire Area ({year})"
-    )
+        success_counts = spacex_df.groupby(
+            'Launch Site'
+        )['class'].sum().reset_index()
 
-    # Bar chart (Vegetation fires)
-    veg_data = filtered.groupby('Month')['Count'].mean().reset_index()
-    fig2 = px.bar(
-        veg_data,
-        x='Month',
-        y='Count',
-        title=f"{region}: Avg Vegetation Fire Pixels ({year})"
-    )
+        fig = px.pie(
+            success_counts,
+            values='class',
+            names='Launch Site',
+            title='Total Successful Launches by Site'
+        )
 
-    return [
-        dcc.Graph(figure=fig1),
-        dcc.Graph(figure=fig2)
+        return fig
+
+    else:
+
+        filtered_df = spacex_df[
+            spacex_df['Launch Site'] == entered_site
+        ]
+
+        outcome_counts = filtered_df['class'].value_counts().reset_index()
+        outcome_counts.columns = ['Outcome', 'Count']
+
+        fig = px.pie(
+            outcome_counts,
+            values='Count',
+            names='Outcome',
+            title=f'Success vs Failure for {entered_site}'
+        )
+
+        return fig
+
+# Scatter callback
+@app.callback(
+    Output('success-payload-scatter-chart', 'figure'),
+    [
+        Input('site-dropdown', 'value'),
+        Input('payload-slider', 'value')
+    ]
+)
+def update_scatter_chart(entered_site, payload_value):
+
+    low, high = payload_value
+
+    filtered_df = spacex_df[
+        (spacex_df['Payload Mass (kg)'] >= low) &
+        (spacex_df['Payload Mass (kg)'] <= high)
     ]
 
-# Run server
+    if entered_site == 'ALL':
+
+        fig = px.scatter(
+            filtered_df,
+            x='Payload Mass (kg)',
+            y='class',
+            color='Booster Version Category',
+            title='Correlation between Payload and Success for All Sites'
+        )
+
+        return fig
+
+    else:
+
+        site_df = filtered_df[
+            filtered_df['Launch Site'] == entered_site
+        ]
+
+        fig = px.scatter(
+            site_df,
+            x='Payload Mass (kg)',
+            y='class',
+            color='Booster Version Category',
+            title=f'Correlation between Payload and Success for {entered_site}'
+        )
+
+        return fig
+
+# Run app
 if __name__ == '__main__':
     app.run()
